@@ -768,7 +768,7 @@ def plot_prediction_confidence(nn, X_test, y_test, class_labels):
 
 def plot_network_architecture(layer_sizes):
     """Visualize the neural network architecture."""
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(14, 10))
     
     num_layers = len(layer_sizes)
     max_neurons = max(layer_sizes)
@@ -776,38 +776,47 @@ def plot_network_architecture(layer_sizes):
     # Calculate positions
     layer_positions = np.linspace(0.1, 0.9, num_layers)
     
-    for layer_idx, (x_pos, n_neurons) in enumerate(zip(layer_positions, layer_sizes)):
-        # Limit visualization to max 10 neurons per layer
+    # First draw all connections (so they appear behind nodes)
+    for layer_idx in range(num_layers - 1):
+        x_pos = layer_positions[layer_idx]
+        n_neurons = layer_sizes[layer_idx]
         display_neurons = min(n_neurons, 10)
-        y_positions = np.linspace(0.2, 0.8, display_neurons)
+        y_positions = np.linspace(0.15, 0.85, display_neurons)
+        
+        next_neurons = min(layer_sizes[layer_idx + 1], 10)
+        next_y = np.linspace(0.15, 0.85, next_neurons)
+        next_x = layer_positions[layer_idx + 1]
+        
+        # Draw connections from each neuron in current layer to each in next layer
+        for y1 in y_positions:
+            for y2 in next_y:
+                ax.plot([x_pos + 0.025, next_x - 0.025],
+                       [y1, y2], color='gray', alpha=0.3, linewidth=0.5, zorder=1)
+    
+    # Then draw all nodes (on top of connections)
+    for layer_idx, (x_pos, n_neurons) in enumerate(zip(layer_positions, layer_sizes)):
+        display_neurons = min(n_neurons, 10)
+        y_positions = np.linspace(0.15, 0.85, display_neurons)
         
         for i, y_pos in enumerate(y_positions):
-            circle = plt.Circle((x_pos, y_pos), 0.02, color='steelblue', ec='black', linewidth=1)
+            circle = plt.Circle((x_pos, y_pos), 0.025, color='steelblue', 
+                               ec='darkblue', linewidth=1.5, zorder=2)
             ax.add_patch(circle)
         
         # Add "..." if neurons were truncated
         if n_neurons > 10:
-            ax.text(x_pos, 0.1, f'...({n_neurons} neurons)', ha='center', fontsize=9)
-        
-        # Draw connections to next layer
-        if layer_idx < num_layers - 1:
-            next_neurons = min(layer_sizes[layer_idx + 1], 10)
-            next_y = np.linspace(0.2, 0.8, next_neurons)
-            for y1 in y_positions[:min(5, len(y_positions))]:
-                for y2 in next_y[:min(5, len(next_y))]:
-                    ax.plot([x_pos + 0.02, layer_positions[layer_idx + 1] - 0.02],
-                           [y1, y2], 'gray', alpha=0.1, linewidth=0.5)
+            ax.text(x_pos, 0.05, f'...({n_neurons} total)', ha='center', fontsize=9, style='italic')
         
         # Layer labels
         layer_names = ['Input'] + [f'Hidden {i+1}' for i in range(num_layers - 2)] + ['Output']
-        ax.text(x_pos, 0.92, f'{layer_names[layer_idx]}\n({layer_sizes[layer_idx]})', 
-                ha='center', fontsize=10, fontweight='bold')
+        ax.text(x_pos, 0.95, f'{layer_names[layer_idx]}\n({layer_sizes[layer_idx]})', 
+                ha='center', fontsize=11, fontweight='bold')
     
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_aspect('equal')
     ax.axis('off')
-    ax.set_title('Neural Network Architecture', fontsize=14, fontweight='bold')
+    ax.set_title('Neural Network Architecture', fontsize=14, fontweight='bold', pad=10)
     
     fig.tight_layout()
     return fig
