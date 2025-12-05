@@ -78,9 +78,9 @@ December 2025
 
 # Network Architecture
 
-![w:600](runs/2025-12-05_10-23-51/plot_architecture.png)
+![w:600](runs/2025-12-05_12-49-40_ordinal/plot_architecture.png)
 
-**Structure:** [11, 128, 64, 32, 7] — Progressive narrowing
+**Structure:** [11, 128, 64, 32, 6] — Progressive narrowing (ordinal: K-1 outputs)
 
 ---
 
@@ -211,10 +211,10 @@ Features have different scales:
 **Key insight:** Quality 3→4→5→6→7→8→9 has a natural order!
 
 ### Instead of Softmax (7 classes):
-$$P(\text{class} = k)$$ — treats classes as independent
+P(class = k) — treats classes as independent
 
 ### Use Cumulative Probabilities (6 thresholds):
-$$P(\text{quality} > k) \text{ for } k = 3, 4, 5, 6, 7, 8$$
+P(quality > k) for k = 3, 4, 5, 6, 7, 8
 
 | Encoding | Quality 5 | Quality 7 |
 |----------|-----------|-----------|
@@ -227,9 +227,9 @@ $$P(\text{quality} > k) \text{ for } k = 3, 4, 5, 6, 7, 8$$
 
 # Training Results
 
-![w:750](runs/2025-12-05_10-23-51/plot_training_history.png)
+![w:750](runs/2025-12-05_12-49-40_ordinal/plot_training_history.png)
 
-Early stopping at epoch ~1282, restored best weights from epoch 982
+Early stopping at epoch ~1560, restored best weights from epoch 1260
 
 ---
 
@@ -252,9 +252,21 @@ Early stopping at epoch ~1282, restored best weights from epoch 982
 
 ---
 
-# Confusion Matrix Analysis
+# Confusion Matrix: Raw Counts
 
-![w:550](runs/2025-12-05_10-23-51/plot_confusion_matrix_recall.png)
+![w:500](runs/2025-12-05_12-49-40_ordinal/plot_confusion_matrix_raw.png)
+
+---
+
+# Confusion Matrix: Recall (Row-normalized)
+
+![w:500](runs/2025-12-05_12-49-40_ordinal/plot_confusion_matrix_recall.png)
+
+---
+
+# Confusion Matrix: Precision (Col-normalized)
+
+![w:500](runs/2025-12-05_12-49-40_ordinal/plot_confusion_matrix_precision.png)
 
 ---
 
@@ -303,7 +315,6 @@ Early stopping at epoch ~1282, restored best weights from epoch 982
 
 | Technique | Status | Impact |
 |-----------|--------|--------|
-| **Ordinal regression** | ✅ Implemented | +0.5pp |
 | **Class weighting** | Pending | Est. +2-3pp |
 | **SMOTE** | Pending | Est. +1-2pp |
 | **Ensemble methods** | Pending | Est. +3-5pp |
@@ -339,6 +350,7 @@ github.com/fraco-oxza/final-ia
 <br>
 
 ### Key files:
-- `neural_network.py` — Full implementation
+- `src/` — Modular implementation (model, training, config)
+- `main.py` — Entry point
 - `REPORT.md` — Detailed documentation
 
