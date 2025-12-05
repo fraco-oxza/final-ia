@@ -5,20 +5,29 @@ paginate: true
 backgroundColor: #fff
 style: |
   section {
-    font-size: 28px;
+    font-size: 24px;
+    padding: 40px;
   }
   h1 {
     color: #2d3748;
+    font-size: 36px;
   }
   h2 {
     color: #4a5568;
+    font-size: 30px;
+  }
+  h3 {
+    font-size: 26px;
   }
   table {
-    font-size: 24px;
+    font-size: 20px;
   }
   img {
     display: block;
     margin: 0 auto;
+  }
+  ul, ol {
+    font-size: 22px;
   }
 ---
 
@@ -57,20 +66,13 @@ December 2025
 
 # Why Is This Problem Difficult?
 
-<br>
+1. **Extreme class imbalance** — Only 5 samples of quality 9
 
-1. **Extreme class imbalance**
-   - Only 5 samples of quality 9 in entire dataset
-   - Model tends to ignore rare classes
+2. **Subjective labels** — Human tasters disagree by 1-2 points
 
-2. **Subjective labels**
-   - Human tasters may disagree by 1-2 points
+3. **Adjacent classes are chemically similar** — Quality 5 and 6 nearly identical
 
-3. **Adjacent classes are chemically similar**
-   - Quality 5 and 6 wines have nearly identical compositions
-
-4. **Limited features**
-   - No grape variety, aging process, or sensory data
+4. **Limited features** — No grape variety, aging, or sensory data
 
 ---
 
@@ -84,119 +86,91 @@ December 2025
 
 # Why This Architecture?
 
-<br>
-
 ### Layer Design: 128 → 64 → 32
 
-- **First layer (128):** High capacity to learn feature combinations
+- **First layer (128):** Learn diverse feature combinations
 - **Subsequent layers:** Compress into abstract representations
-- **Funnel shape:** Reduces parameters while maintaining power
-
-<br>
+- **Funnel shape:** Fewer parameters, maintains power
 
 ### Why 3 Hidden Layers?
 
-- 1-2 layers: Underfitting
-- 3 layers: Best balance ✓
-- 4+ layers: No improvement, slower training
+| Layers | Result |
+|--------|--------|
+| 1-2 | Underfitting |
+| **3** | **Best balance** |
+| 4+ | No improvement |
 
 ---
 
 # Activation Functions
 
-<br>
-
 ### Hidden Layers: Leaky ReLU
 
 $$f(x) = \begin{cases} x & \text{if } x > 0 \\ 0.01x & \text{if } x \leq 0 \end{cases}$$
 
-**Why not standard ReLU?**
-- ReLU can cause "dying neurons" (gradient = 0 forever)
-- Leaky ReLU ensures all neurons remain trainable
-
-<br>
+**Why not standard ReLU?** ReLU causes "dying neurons" — Leaky ReLU keeps all neurons trainable
 
 ### Output Layer: Softmax
 
 $$\sigma(z_i) = \frac{e^{z_i}}{\sum_{j} e^{z_j}}$$
 
-Converts logits to probability distribution over 7 classes
+Converts logits → probability distribution over 7 classes
 
 ---
 
-# Weight Initialization
-
-<br>
-
-### He Initialization
+# Weight Initialization: He
 
 $$W \sim \mathcal{N}\left(0, \sqrt{\frac{2}{n_{in}}}\right)$$
 
-<br>
-
-**Why He?**
+**Why He Initialization?**
 - Designed for ReLU-family activations
 - Prevents vanishing/exploding signals
 - Maintains variance through deep networks
 
-Without proper initialization → unstable training
+*Without proper initialization → unstable training*
 
 ---
 
 # Loss Function: Cross-Entropy
 
-<br>
-
 $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N}\sum_{c=1}^{C} y_{i,c} \log(\hat{y}_{i,c})$$
-
-<br>
 
 **Why Cross-Entropy?**
 
 1. Information-theoretic foundation
-2. Combined with Softmax → clean gradient: $\nabla = \hat{y} - y$
-3. Properly penalizes confident wrong predictions
+2. With Softmax → clean gradient: $\nabla = \hat{y} - y$
+3. Penalizes confident wrong predictions
 
-MSE performs poorly for classification tasks
+*MSE performs poorly for classification*
 
 ---
 
 # Optimizer: AdamW
 
-<br>
-
 **AdamW = Adam + Decoupled Weight Decay**
 
 | Component | Purpose |
-|-----------|---------|
+|-----------|--------|
 | Momentum ($\beta_1 = 0.9$) | Accelerates convergence |
 | Adaptive LR ($\beta_2 = 0.999$) | Per-parameter learning rates |
 | Weight Decay ($\lambda = 0.001$) | Regularization |
 
-<br>
-
 **Why AdamW over SGD?**
-- Converged in ~1000 epochs vs ~3000+ with SGD
+- ~1000 epochs vs ~3000+ with SGD
 - Better regularization than standard Adam
 
 ---
 
 # Regularization Strategy
 
-<br>
-
-### The Problem: Severe Overfitting
+### Problem: Severe Overfitting
 Without regularization: **77% train, 56% test** (21% gap!)
 
-<br>
-
 | Technique | Purpose | Setting |
-|-----------|---------|---------|
+|-----------|---------|--------|
 | **Dropout** | Prevent co-adaptation | 30% |
-| **Early Stopping** | Stop before memorization | 300 epochs patience |
-| **LR Decay** | Fine-tuning | 0.95x every 500 epochs |
-
-<br>
+| **Early Stopping** | Stop before memorization | 300 epochs |
+| **LR Decay** | Fine-tuning | 0.95x / 500 epochs |
 
 **Result:** Gap reduced from 21% → 4%
 
@@ -204,43 +178,50 @@ Without regularization: **77% train, 56% test** (21% gap!)
 
 # Why 30% Dropout?
 
-<br>
-
-Tested multiple dropout rates:
-
 | Rate | Result |
 |------|--------|
-| 0-20% | Still significant overfitting |
-| **30%** | **Best balance** ✓ |
-| 40-50% | Underfitting, lower accuracy |
-
-<br>
+| 0-20% | Still overfitting |
+| **30%** | **Best balance** |
+| 40-50% | Underfitting |
 
 **How it works:**
-- Randomly zero out 30% of neurons during training
-- Forces network to learn robust features
-- Acts like training ensemble of networks
+- Randomly zero out 30% of neurons
+- Forces robust feature learning
+- Acts like ensemble of networks
 
 ---
 
 # Data Preprocessing
 
-<br>
-
-### Z-score Normalization
-$$x' = \frac{x - \mu}{\sigma}$$
+### Z-score Normalization: $x' = \frac{x - \mu}{\sigma}$
 
 Features have different scales:
-- Density: 0.99 - 1.04
-- Sulfur dioxide: 6 - 440
-
-<br>
+- Density: 0.99 - 1.04 | Sulfur dioxide: 6 - 440
 
 ### Stratified Split (70% / 15% / 15%)
 
 - Maintains class proportions in each split
 - Critical for imbalanced data
 - Ensures rare classes appear in test set
+
+---
+
+# Ordinal Regression
+
+**Key insight:** Quality 3→4→5→6→7→8→9 has a natural order!
+
+### Instead of Softmax (7 classes):
+$$P(\text{class} = k)$$ — treats classes as independent
+
+### Use Cumulative Probabilities (6 thresholds):
+$$P(\text{quality} > k) \text{ for } k = 3, 4, 5, 6, 7, 8$$
+
+| Encoding | Quality 5 | Quality 7 |
+|----------|-----------|-----------|
+| One-hot | [0,0,1,0,0,0,0] | [0,0,0,0,1,0,0] |
+| Ordinal | [1,1,0,0,0,0] | [1,1,1,1,0,0] |
+
+**Prediction:** Count how many thresholds are exceeded
 
 ---
 
@@ -252,27 +233,22 @@ Early stopping at epoch ~1282, restored best weights from epoch 982
 
 ---
 
-# Final Performance
+# Final Performance: Categorical vs Ordinal
 
-<br>
+| Model | Train | Val | **Test** |
+|-------|-------|-----|----------|
+| Categorical (Softmax) | 63.03% | 56.95% | **58.91%** |
+| **Ordinal Regression** | 62.85% | 57.20% | **59.42%** |
 
-| Metric | Value |
-|--------|-------|
-| Training Accuracy | 63.03% |
-| Validation Accuracy | 56.95% |
-| **Test Accuracy** | **58.91%** |
-
-<br>
-
-### Comparison with Baselines
+### Improvement: +0.51 percentage points
 
 | Method | Accuracy |
 |--------|----------|
 | Random guessing | 14.3% |
 | Always predict "6" | 43.7% |
-| **Our model** | **58.9%** |
+| **Ordinal model** | **59.4%** |
 
-**4x better than random, +15pp over majority baseline**
+**4x better than random, +16pp over majority baseline**
 
 ---
 
@@ -284,93 +260,71 @@ Early stopping at epoch ~1282, restored best weights from epoch 982
 
 # Error Analysis
 
-<br>
+### What works well:
+- Classes 5, 6, 7 (~65% recall)
+- Sufficient training data for these classes
 
-### What the model does well:
-- Classes 5, 6, 7 (sufficient training data)
-- ~65% recall on majority classes
-
-<br>
-
-### What the model struggles with:
+### What struggles:
 - Classes 3 and 9 (almost never predicted)
-- Adjacent class confusion (5↔6, 6↔7)
+- Adjacent class confusion (5-6, 6-7)
 
-<br>
-
-**This is expected without explicit class balancing**
+*Expected without explicit class balancing*
 
 ---
 
 # Why ~59% Accuracy is Good
 
-<br>
+| Comparison | Result |
+|------------|--------|
+| vs Random (14.3%) | **4.2x improvement** |
+| vs Majority baseline (43.7%) | **+16 points** |
+| vs Literature (SVM, RF, XGB) | Competitive (55-65%) |
 
-1. **vs Random:** 14.3% → 58.9% = **4.1x improvement**
+**Problem difficulty:** Even human experts disagree on adjacent levels
 
-2. **vs Majority baseline:** 43.7% → 58.9% = **+15 points**
-
-3. **vs Literature:** Published results with SVM, Random Forest, XGBoost achieve 55-65%
-
-4. **Problem difficulty:** Even human experts disagree on adjacent quality levels
-
-<br>
-
-**Our from-scratch implementation is competitive!**
+*Our from-scratch implementation is competitive!*
 
 ---
 
 # Limitations
 
-<br>
+1. **Class Imbalance** — Model ignores rare classes (3, 9)
+   - Needs class weighting or oversampling
 
-1. **Class Imbalance**
-   - Model ignores extremely rare classes (3, 9)
-   - Would need class weighting or oversampling
+2. **Feature Limitations** — Only 11 chemical measurements
+   - Missing: grape variety, vintage, process
 
-2. **Feature Limitations**
-   - Only 11 chemical measurements
-   - Missing: grape variety, vintage, winemaking process
-
-3. **Ordinal vs Categorical**
-   - We treat quality as 7 independent classes
-   - Being wrong by 1 should cost less than wrong by 5
+3. **Ordinal Nature** — ✅ Addressed with ordinal regression!
+   - Improved from 58.91% → 59.42%
 
 ---
 
 # Potential Improvements
 
-<br>
-
-| Technique | How it helps |
-|-----------|-------------|
-| **Class weighting** | Penalize minority class errors more |
-| **SMOTE** | Generate synthetic samples for rare classes |
-| **Ordinal regression** | Respect the natural order of quality |
-| **Ensemble methods** | Combine multiple models |
-| **Feature engineering** | Polynomial features, interactions |
+| Technique | Status | Impact |
+|-----------|--------|--------|
+| **Ordinal regression** | ✅ Implemented | +0.5pp |
+| **Class weighting** | Pending | Est. +2-3pp |
+| **SMOTE** | Pending | Est. +1-2pp |
+| **Ensemble methods** | Pending | Est. +3-5pp |
+| **Feature engineering** | Pending | Variable |
 
 ---
 
 # Conclusion
 
-<br>
-
 ### What we built:
 - Neural network **100% from scratch** with NumPy
-- Forward/backward propagation, AdamW, dropout — all manual
-
-<br>
+- Forward/backward prop, AdamW, dropout — all manual
+- **Ordinal regression** for quality ordering
 
 ### Key results:
-- **~59% test accuracy** on 7-class imbalanced problem
-- Significantly outperforms baselines
-- Competitive with literature results
-
-<br>
+- **59.42% test accuracy** (ordinal) on 7-class imbalanced problem
+- 4x better than random, +16pp over baseline
+- Competitive with literature
 
 ### Key techniques:
-AdamW, Dropout, Early Stopping, Stratified Split, He Init
+AdamW, Dropout, Early Stopping, Stratified Split, Ordinal Loss
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## Abstract
 
-This report presents a neural network implementation from scratch using NumPy for classifying wine quality based on physicochemical properties. The model achieves approximately **59% test accuracy** on a challenging 7-class classification problem with highly imbalanced classes. We detail the architecture choices, training methodology, regularization techniques, and provide a comprehensive analysis of the results along with justifications for each design decision.
+This report presents a neural network implementation from scratch using NumPy for classifying wine quality based on physicochemical properties. We implement both categorical (Softmax) and **ordinal regression** approaches, achieving **59.42% test accuracy** with the ordinal model on a challenging 7-class classification problem with highly imbalanced classes. We detail the architecture choices, training methodology, regularization techniques, and provide a comprehensive analysis of the results along with justifications for each design decision.
 
 ## 1. Introduction
 
@@ -130,7 +130,66 @@ Cross-entropy is the standard loss for classification because:
 
 Alternative losses like MSE perform poorly for classification because they don't properly penalize confident wrong predictions.
 
-### 3.2 Optimizer: AdamW
+### 3.2 Ordinal Regression
+
+In addition to the standard categorical approach (Softmax + Cross-Entropy), we implemented **ordinal regression** to better handle the ordinal nature of wine quality scores.
+
+#### The Problem with Categorical Classification
+
+Wine quality is inherently ordinal: 3 < 4 < 5 < 6 < 7 < 8 < 9. However, standard multi-class classification treats these as independent categories. This means:
+- Predicting 3 when the true label is 9 costs the same as predicting 8
+- The model doesn't learn that adjacent classes are "closer" than distant ones
+
+#### Cumulative Probability Approach
+
+Instead of predicting $P(\text{class} = k)$ for each class, ordinal regression predicts **cumulative probabilities**:
+
+$$P(\text{quality} > k) \text{ for } k = 3, 4, 5, 6, 7, 8$$
+
+This gives us K-1 = 6 thresholds for our 7 classes.
+
+#### Ordinal Encoding
+
+Labels are encoded differently from one-hot:
+
+| Quality | One-Hot Encoding | Ordinal Encoding |
+|---------|------------------|------------------|
+| 3 | [1,0,0,0,0,0,0] | [0,0,0,0,0,0] |
+| 4 | [0,1,0,0,0,0,0] | [1,0,0,0,0,0] |
+| 5 | [0,0,1,0,0,0,0] | [1,1,0,0,0,0] |
+| 6 | [0,0,0,1,0,0,0] | [1,1,1,0,0,0] |
+| 7 | [0,0,0,0,1,0,0] | [1,1,1,1,0,0] |
+| 8 | [0,0,0,0,0,1,0] | [1,1,1,1,1,0] |
+| 9 | [0,0,0,0,0,0,1] | [1,1,1,1,1,1] |
+
+The ordinal encoding $y[i, k] = 1$ if the quality > k, else 0.
+
+#### Network Architecture Changes
+
+- **Output layer**: 6 neurons (K-1 thresholds) instead of 7
+- **Output activation**: Sigmoid instead of Softmax (each threshold is an independent binary classifier)
+- **Loss function**: Binary cross-entropy for each threshold
+
+$$\mathcal{L}_{ordinal} = -\frac{1}{N}\sum_{i=1}^{N}\sum_{k=1}^{K-1} \left[ y_{i,k} \log(\hat{y}_{i,k}) + (1-y_{i,k}) \log(1-\hat{y}_{i,k}) \right]$$
+
+#### Prediction
+
+To predict a class from cumulative probabilities:
+1. Each output is $P(\text{quality} > k)$
+2. Count how many thresholds exceed 0.5
+3. The count equals the predicted class index
+
+Example: If outputs are [0.95, 0.88, 0.72, 0.35, 0.12, 0.02]
+- Thresholds > 0.5: 3 (first three)
+- Predicted class index: 3 → Quality 6
+
+#### Why Ordinal Regression Helps
+
+1. **Respects ordering**: The model learns that P(quality > 5) > P(quality > 6) (monotonicity is encouraged)
+2. **Smoother predictions**: Adjacent classes share similar cumulative probability patterns
+3. **Better gradients**: Errors propagate through related thresholds, not independent classes
+
+### 3.3 Optimizer: AdamW
 
 We implemented **AdamW** (Adam with decoupled weight decay), chosen over simpler optimizers for its superior convergence properties.
 
@@ -158,7 +217,7 @@ $$\theta_t = \theta_{t-1} - \eta \left( \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \eps
 | Epsilon | 1e-8 | Prevents division by zero |
 | Weight decay | 0.001 | Mild regularization to complement dropout |
 
-### 3.3 Regularization Techniques
+### 3.4 Regularization Techniques
 
 #### Dropout (30%)
 
@@ -212,7 +271,7 @@ Large learning rates help escape local minima early in training but cause oscill
 
 The decay factor (0.95) and schedule (every 500 epochs) were chosen to reduce LR by roughly 50% over the typical training duration (~2000-3000 epochs before early stopping).
 
-### 3.4 Data Preprocessing
+### 3.5 Data Preprocessing
 
 #### Z-score Normalization
 
@@ -259,16 +318,21 @@ With severe class imbalance, random splitting could put all samples of class 9 (
 
 ### 4.2 Final Performance
 
-| Metric | Value |
-|--------|-------|
-| Training Accuracy | 63.03% |
-| Validation Accuracy | 56.95% |
-| Test Accuracy | **58.91%** |
+We compare two approaches: categorical classification (Softmax + Cross-Entropy) and ordinal regression.
 
-The test accuracy (58.91%) being between training and validation suggests:
-- The model generalizes reasonably well
-- Early stopping successfully prevented severe overfitting
-- The validation set was representative of test performance
+| Model | Training | Validation | **Test** |
+|-------|----------|------------|----------|
+| Categorical (Softmax) | 63.03% | 56.95% | 58.91% |
+| **Ordinal Regression** | 62.90% | 59.63% | **59.42%** |
+
+**Improvement: +0.51 percentage points with ordinal regression**
+
+The ordinal model shows:
+- Similar training accuracy (avoiding overfitting)
+- Better validation accuracy (+2.68pp)
+- Improved test accuracy (+0.51pp)
+
+This improvement is modest but consistent, validating that respecting the ordinal nature of wine quality helps the model learn better representations.
 
 ### 4.3 Class Distribution Analysis
 
@@ -331,11 +395,11 @@ The per-class breakdown confirms:
 
 ### 6.1 Why ~59% Accuracy is Reasonable
 
-Our 59% test accuracy may seem low, but context is essential:
+Our 59.42% test accuracy (ordinal model) may seem low, but context is essential:
 
-1. **Baseline Comparison**: Random guessing achieves 14.3% accuracy (1/7 classes). Our model achieves **4.1x** this baseline.
+1. **Baseline Comparison**: Random guessing achieves 14.3% accuracy (1/7 classes). Our model achieves **4.2x** this baseline.
 
-2. **Majority Class Baseline**: Always predicting class 6 achieves 43.65% accuracy. Our model improves by **15 percentage points** over this naive strategy.
+2. **Majority Class Baseline**: Always predicting class 6 achieves 43.65% accuracy. Our model improves by **16 percentage points** over this naive strategy.
 
 3. **Literature Comparison**: Published results on this dataset using sophisticated methods (SVM, Random Forest, XGBoost) typically achieve 55-65% accuracy. Our from-scratch neural network is competitive.
 
@@ -351,6 +415,7 @@ Our 59% test accuracy may seem low, but context is essential:
 | Stratified Split | Fair evaluation | All classes represented in test set |
 | He Initialization | Stable training | No gradient issues from epoch 1 |
 | Learning Rate Decay | Fine-tuned convergence | Smoother loss curves in later epochs |
+| **Ordinal Regression** | Better accuracy | +0.51pp improvement over categorical |
 
 ### 6.3 Limitations
 
@@ -358,7 +423,7 @@ Our 59% test accuracy may seem low, but context is essential:
 
 2. **Feature Limitations**: Only 11 physicochemical features are available. Wine quality depends on many factors not captured (grape variety, vintage, winemaking process, taster preferences).
 
-3. **Ordinal vs Categorical**: We treat wine quality as 7 independent classes, but in reality, quality is ordinal. A prediction of 6 for a true label of 5 is more reasonable than predicting 3, but our loss treats both errors equally.
+3. **Ordinal Distance**: While we implemented ordinal regression which respects the ordering of classes, our current loss doesn't explicitly penalize predictions based on ordinal distance (e.g., predicting 3 for true 9 costs the same per threshold as any other error).
 
 ### 6.4 Potential Improvements
 
@@ -366,7 +431,7 @@ Our 59% test accuracy may seem low, but context is essential:
 
 2. **Oversampling (SMOTE)**: Generate synthetic samples for rare classes to balance the training distribution.
 
-3. **Ordinal Regression**: Use a loss function that penalizes predictions based on ordinal distance (e.g., predicting 3 for true 9 should cost more than predicting 8).
+3. **Weighted Ordinal Loss**: Enhance our ordinal regression by weighting errors based on ordinal distance (e.g., predicting 3 for true 9 should cost more than predicting 8).
 
 4. **Feature Engineering**: Create polynomial features, interaction terms, or domain-specific ratios that may be more predictive.
 
@@ -374,13 +439,16 @@ Our 59% test accuracy may seem low, but context is essential:
 
 ## 7. Conclusion
 
-We successfully implemented a neural network from scratch using only NumPy that achieves **~59% test accuracy** on the challenging Wine Quality classification task. The implementation demonstrates understanding of:
+We successfully implemented a neural network from scratch using only NumPy that achieves **59.42% test accuracy** (with ordinal regression) on the challenging Wine Quality classification task. The implementation demonstrates understanding of:
 
-- Forward propagation with Leaky ReLU activations and Softmax output
+- Forward propagation with Leaky ReLU activations and Softmax/Sigmoid output
 - Backpropagation with manually derived gradients
 - AdamW optimization with momentum, adaptive learning rates, and decoupled weight decay
 - Regularization through Dropout, Early Stopping, and Learning Rate Decay
 - Data handling with stratified splitting and Z-score normalization
+- **Ordinal regression** for respecting the natural order of quality scores
+
+The ordinal regression approach improved accuracy by 0.51 percentage points over the categorical model, validating that respecting the ordinal nature of the target variable leads to better predictions.
 
 The results are reasonable given the dataset challenges. The model reliably classifies wines of average quality (scores 5-7) but struggles with rare extreme scores, a limitation inherent to the class-imbalanced nature of the problem.
 

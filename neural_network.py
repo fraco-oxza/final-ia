@@ -1,11 +1,12 @@
 """
 Neural Network implementation from scratch using NumPy.
 - Leaky ReLU activation functions
-- Softmax output layer
-- Cross-entropy loss
+- Softmax output layer (categorical) or Sigmoid (ordinal regression)
+- Cross-entropy loss or Ordinal loss
 - Backpropagation with AdamW optimizer
 - Dropout regularization
 - Early stopping
+- Support for ordinal regression (quality prediction)
 """
 
 import os
@@ -18,7 +19,7 @@ from data import X, y
 class NeuralNetwork:
     def __init__(self, layer_sizes, alpha=0.01, learning_rate=0.001, 
                  beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.01,
-                 dropout_rate=0.3):
+                 dropout_rate=0.3, ordinal=False):
         """
         Initialize the neural network.
         
@@ -31,6 +32,7 @@ class NeuralNetwork:
             epsilon: Small constant for numerical stability
             weight_decay: Weight decay coefficient (L2 regularization)
             dropout_rate: Probability of dropping a neuron (0 = no dropout)
+            ordinal: Use ordinal regression (K-1 binary classifiers for K classes)
         """
         self.layer_sizes = layer_sizes
         self.alpha = alpha  # Leaky ReLU parameter
@@ -41,9 +43,18 @@ class NeuralNetwork:
         self.epsilon = epsilon
         self.weight_decay = weight_decay
         self.dropout_rate = dropout_rate
+        self.ordinal = ordinal
         self.num_layers = len(layer_sizes)
         self.t = 0  # Timestep for bias correction
         self.training = True  # Flag for training vs inference mode
+        
+        # For ordinal regression, output layer has K-1 neurons (thresholds)
+        # instead of K (one per class)
+        if ordinal:
+            # Adjust last layer to K-1 outputs
+            layer_sizes = list(layer_sizes)
+            layer_sizes[-1] = layer_sizes[-1] - 1
+            self.layer_sizes = layer_sizes
         
         # Initialize weights and biases
         self.weights = []
@@ -82,6 +93,16 @@ class NeuralNetwork:
         exp_z = np.exp(z - np.max(z, axis=1, keepdims=True))
         return exp_z / np.sum(exp_z, axis=1, keepdims=True)
     
+    def sigmoid(self, z):
+        """Sigmoid activation for ordinal regression."""
+        # Clip for numerical stability
+        z = np.clip(z, -500, 500)
+        return 1 / (1 + np.exp(-z))
+    
+    def sigmoid_derivative(self, s):
+        """Derivative of sigmoid (given sigmoid output)."""
+        return s * (1 - s)
+    
     def forward(self, X):
         """
         Forward propagation through the network.
@@ -115,10 +136,17 @@ class NeuralNetwork:
             
             self.activations.append(current)
         
-        # Output layer with Softmax (no dropout)
+        # Output layer
         z = current @ self.weights[-1] + self.biases[-1]
         self.z_values.append(z)
-        output = self.softmax(z)
+        
+        if self.ordinal:
+            # Ordinal regression: sigmoid on each output (cumulative probabilities)
+            output = self.sigmoid(z)
+        else:
+            # Classification: softmax for probabilities
+            output = self.softmax(z)
+        
         self.activations.append(output)
         
         return output
@@ -139,12 +167,43 @@ class NeuralNetwork:
         y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
         return -np.mean(np.sum(y_true * np.log(y_pred), axis=1))
     
+    def ordinal_loss(self, y_pred, y_true_ordinal):
+        """
+        Compute ordinal (cumulative) cross-entropy loss.
+        
+        For ordinal regression, we predict P(Y > k) for k = 0, 1, ..., K-2
+        Binary cross-entropy is applied to each threshold.
+        
+        Args:
+            y_pred: Predicted cumulative probabilities (n_samples, K-1)
+            y_true_ordinal: Ordinal encoded labels (n_samples, K-1)
+                           y[i, k] = 1 if class[i] > k, else 0
+            
+        Returns:
+            Average ordinal loss
+        """
+        epsilon = 1e-15
+        y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
+        # Binary cross-entropy for each threshold
+        loss = -np.mean(
+            y_true_ordinal * np.log(y_pred) + 
+            (1 - y_true_ordinal) * np.log(1 - y_pred)
+        )
+        return loss
+    
+    def compute_loss(self, y_pred, y_true):
+        """Compute appropriate loss based on model type."""
+        if self.ordinal:
+            return self.ordinal_loss(y_pred, y_true)
+        else:
+            return self.cross_entropy_loss(y_pred, y_true)
+    
     def backward(self, y_true):
         """
         Backpropagation to compute gradients.
         
         Args:
-            y_true: One-hot encoded true labels
+            y_true: One-hot encoded true labels (categorical) or ordinal encoded (ordinal)
             
         Returns:
             Gradients for weights and biases
@@ -154,9 +213,14 @@ class NeuralNetwork:
         weight_gradients = []
         bias_gradients = []
         
-        # Output layer gradient (softmax + cross-entropy combined)
-        # The gradient simplifies to (y_pred - y_true)
-        delta = self.activations[-1] - y_true
+        if self.ordinal:
+            # Ordinal regression gradient
+            # For sigmoid output with binary cross-entropy: gradient = (y_pred - y_true)
+            delta = self.activations[-1] - y_true
+        else:
+            # Output layer gradient (softmax + cross-entropy combined)
+            # The gradient simplifies to (y_pred - y_true)
+            delta = self.activations[-1] - y_true
         
         # Gradient for last layer
         dW = self.activations[-2].T @ delta / m
@@ -173,28 +237,6 @@ class NeuralNetwork:
             # Apply dropout mask if it was used during forward pass
             if self.dropout_masks[i] is not None:
                 delta = delta * self.dropout_masks[i]
-            
-            # Compute gradients
-            dW = self.activations[i].T @ delta / m
-            db = np.mean(delta, axis=0, keepdims=True)
-            
-            weight_gradients.insert(0, dW)
-            bias_gradients.insert(0, db)
-        
-        return weight_gradients, bias_gradients
-        delta = self.activations[-1] - y_true
-        
-        # Gradient for last layer
-        dW = self.activations[-2].T @ delta / m
-        db = np.mean(delta, axis=0, keepdims=True)
-        
-        weight_gradients.insert(0, dW)
-        bias_gradients.insert(0, db)
-        
-        # Backpropagate through hidden layers
-        for i in range(self.num_layers - 3, -1, -1):
-            # Propagate error back
-            delta = (delta @ self.weights[i + 1].T) * self.leaky_relu_derivative(self.z_values[i])
             
             # Compute gradients
             dW = self.activations[i].T @ delta / m
@@ -288,7 +330,7 @@ class NeuralNetwork:
             y_pred = self.forward(X)
             
             # Compute loss
-            train_loss = self.cross_entropy_loss(y_pred, y)
+            train_loss = self.compute_loss(y_pred, y)
             history['train_loss'].append(train_loss)
             
             # Backward pass
@@ -305,7 +347,7 @@ class NeuralNetwork:
             # Validation metrics
             if X_val is not None and y_val is not None:
                 val_pred = self.forward(X_val)
-                val_loss = self.cross_entropy_loss(val_pred, y_val)
+                val_loss = self.compute_loss(val_pred, y_val)
                 val_acc = self.accuracy(X_val, y_val)
                 history['val_loss'].append(val_loss)
                 history['val_acc'].append(val_acc)
@@ -361,9 +403,16 @@ class NeuralNetwork:
         """
         was_training = self.training
         self.training = False  # Disable dropout for inference
-        probabilities = self.forward(X)
+        output = self.forward(X)
         self.training = was_training
-        return np.argmax(probabilities, axis=1)
+        
+        if self.ordinal:
+            # For ordinal regression: predict class based on cumulative probabilities
+            # P(Y > k) are the outputs. We predict the highest k where P(Y > k) > 0.5
+            # Or equivalently, sum the number of thresholds exceeded
+            return np.sum(output > 0.5, axis=1)
+        else:
+            return np.argmax(output, axis=1)
     
     def predict_proba(self, X):
         """
@@ -381,19 +430,23 @@ class NeuralNetwork:
         self.training = was_training
         return probabilities
     
-    def accuracy(self, X, y_onehot):
+    def accuracy(self, X, y_encoded):
         """
         Compute classification accuracy.
         
         Args:
             X: Input data
-            y_onehot: One-hot encoded true labels
+            y_encoded: One-hot (categorical) or ordinal encoded true labels
             
         Returns:
             Accuracy score
         """
         predictions = self.predict(X)
-        true_labels = np.argmax(y_onehot, axis=1)
+        if self.ordinal:
+            # For ordinal: true label = sum of 1s in ordinal encoding
+            true_labels = np.sum(y_encoded, axis=1).astype(int)
+        else:
+            true_labels = np.argmax(y_encoded, axis=1)
         return np.mean(predictions == true_labels)
 
 
@@ -430,25 +483,79 @@ def preprocess_data(X, y):
     return X_normalized, y_onehot, unique_classes
 
 
-def stratified_train_val_test_split(X, y, val_ratio=0.15, test_ratio=0.15, random_seed=42):
+def onehot_to_ordinal(y_onehot):
+    """
+    Convert one-hot encoded labels to ordinal encoding.
+    
+    For K classes, ordinal encoding has K-1 columns.
+    y[i, k] = 1 if class[i] > k, else 0
+    
+    Example for 4 classes (0, 1, 2, 3):
+        Class 0: [0, 0, 0]  (not > 0, not > 1, not > 2)
+        Class 1: [1, 0, 0]  (> 0, not > 1, not > 2)
+        Class 2: [1, 1, 0]  (> 0, > 1, not > 2)
+        Class 3: [1, 1, 1]  (> 0, > 1, > 2)
+    
+    Args:
+        y_onehot: One-hot encoded labels (n_samples, K)
+        
+    Returns:
+        y_ordinal: Ordinal encoded labels (n_samples, K-1)
+    """
+    n_samples = y_onehot.shape[0]
+    n_classes = y_onehot.shape[1]
+    
+    # Get class indices
+    class_indices = np.argmax(y_onehot, axis=1)
+    
+    # Create ordinal encoding
+    y_ordinal = np.zeros((n_samples, n_classes - 1))
+    for i in range(n_samples):
+        # Set 1 for all thresholds below the class
+        y_ordinal[i, :class_indices[i]] = 1
+    
+    return y_ordinal
+
+
+def ordinal_to_class_indices(y_ordinal):
+    """
+    Convert ordinal encoding back to class indices.
+    
+    Args:
+        y_ordinal: Ordinal encoded labels (n_samples, K-1)
+        
+    Returns:
+        class_indices: Array of class indices
+    """
+    return np.sum(y_ordinal, axis=1).astype(int)
+
+
+def stratified_train_val_test_split(X, y, val_ratio=0.15, test_ratio=0.15, random_seed=42, is_ordinal=False):
     """
     Split data into training, validation, and test sets with stratification.
     Each split maintains the same class distribution as the original dataset.
     
     Args:
         X: Features
-        y: One-hot encoded labels
+        y: One-hot or ordinal encoded labels
         val_ratio: Proportion of data for validation
         test_ratio: Proportion of data for testing
         random_seed: Random seed for reproducibility
+        is_ordinal: If True, y is ordinal encoded (sum of row = class index)
         
     Returns:
         X_train, X_val, X_test, y_train, y_val, y_test
     """
     np.random.seed(random_seed)
     
-    # Get class indices from one-hot encoded labels
-    class_indices = np.argmax(y, axis=1)
+    # Get class indices
+    if is_ordinal:
+        # For ordinal encoding, class = sum of 1s in each row
+        class_indices = np.sum(y, axis=1).astype(int)
+    else:
+        # For one-hot encoding, class = argmax
+        class_indices = np.argmax(y, axis=1)
+    
     unique_classes = np.unique(class_indices)
     
     train_indices = []
@@ -822,9 +929,11 @@ def plot_network_architecture(layer_sizes):
     return fig
 
 
-def main():
+def main(use_ordinal=False):
+    mode_name = "Ordinal Regression" if use_ordinal else "Categorical (Softmax)"
     print("=" * 60)
-    print("Neural Network for Wine Quality Classification")
+    print(f"Neural Network for Wine Quality Classification")
+    print(f"Mode: {mode_name}")
     print("(with Dropout, Early Stopping, and LR Decay)")
     print("=" * 60)
     
@@ -837,10 +946,16 @@ def main():
     print(f"Number of classes (quality levels): {len(class_labels)}")
     print(f"Quality classes: {class_labels}")
     
+    # Convert to ordinal encoding if needed
+    if use_ordinal:
+        y_encoded = onehot_to_ordinal(y_onehot)
+        print(f"Using ordinal encoding with {y_encoded.shape[1]} thresholds")
+    else:
+        y_encoded = y_onehot
+    
     # Split data into train/validation/test with stratification
-    # This ensures each split has the same class distribution as the original dataset
     X_train, X_val, X_test, y_train, y_val, y_test = stratified_train_val_test_split(
-        X_normalized, y_onehot, val_ratio=0.15, test_ratio=0.15
+        X_normalized, y_encoded, val_ratio=0.15, test_ratio=0.15, is_ordinal=use_ordinal
     )
     print(f"\nTraining samples: {X_train.shape[0]}")
     print(f"Validation samples: {X_val.shape[0]}")
@@ -848,10 +963,16 @@ def main():
     
     # Verify stratification: print class distribution in each set
     print("\nClass distribution verification (stratified split):")
-    y_train_classes = np.argmax(y_train, axis=1)
-    y_val_classes = np.argmax(y_val, axis=1)
-    y_test_classes = np.argmax(y_test, axis=1)
-    y_all_classes = np.argmax(y_onehot, axis=1)
+    if use_ordinal:
+        y_train_classes = np.sum(y_train, axis=1).astype(int)
+        y_val_classes = np.sum(y_val, axis=1).astype(int)
+        y_test_classes = np.sum(y_test, axis=1).astype(int)
+        y_all_classes = np.sum(y_encoded, axis=1).astype(int)
+    else:
+        y_train_classes = np.argmax(y_train, axis=1)
+        y_val_classes = np.argmax(y_val, axis=1)
+        y_test_classes = np.argmax(y_test, axis=1)
+        y_all_classes = np.argmax(y_onehot, axis=1)
     
     print(f"{'Class':<10} {'Full %':<10} {'Train %':<10} {'Val %':<10} {'Test %':<10}")
     print("-" * 50)
@@ -862,13 +983,16 @@ def main():
         test_pct = 100 * np.sum(y_test_classes == i) / len(y_test_classes)
         print(f"{cls:<10} {full_pct:<10.2f} {train_pct:<10.2f} {val_pct:<10.2f} {test_pct:<10.2f}")
     
-    # Define network architecture (bigger network)
+    # Define network architecture
     input_size = X_normalized.shape[1]
     output_size = len(class_labels)  # Cardinality of qualities
     hidden_sizes = [128, 64, 32]  # Three hidden layers
     
     layer_sizes = [input_size] + hidden_sizes + [output_size]
-    print(f"\nNetwork architecture: {layer_sizes}")
+    if use_ordinal:
+        print(f"\nNetwork architecture: {layer_sizes[:-1] + [output_size - 1]} (ordinal: K-1 outputs)")
+    else:
+        print(f"\nNetwork architecture: {layer_sizes}")
     
     # Create and train network
     print("\nTraining neural network...")
@@ -877,12 +1001,13 @@ def main():
     nn = NeuralNetwork(
         layer_sizes=layer_sizes,
         alpha=0.01,           # Leaky ReLU slope
-        learning_rate=0.002,  # AdamW learning rate (slightly higher)
+        learning_rate=0.002,  # AdamW learning rate
         beta1=0.9,            # First moment decay
         beta2=0.999,          # Second moment decay
         epsilon=1e-8,         # Numerical stability
         weight_decay=0.001,   # Reduced weight decay
-        dropout_rate=0.3      # 30% dropout
+        dropout_rate=0.3,     # 30% dropout
+        ordinal=use_ordinal   # Use ordinal regression
     )
     
     history = nn.train(
@@ -907,7 +1032,10 @@ def main():
     print(f"Test Accuracy: {test_accuracy:.4f}")
     
     # Get predictions for plots
-    y_test_labels = np.argmax(y_test, axis=1)
+    if use_ordinal:
+        y_test_labels = np.sum(y_test, axis=1).astype(int)
+    else:
+        y_test_labels = np.argmax(y_test, axis=1)
     y_pred = nn.predict(X_test)
     
     # Show some predictions
@@ -924,8 +1052,9 @@ def main():
     print("=" * 60)
     
     # Create runs folder with timestamp
+    mode_suffix = "_ordinal" if use_ordinal else "_categorical"
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    run_folder = os.path.join('runs', timestamp)
+    run_folder = os.path.join('runs', timestamp + mode_suffix)
     os.makedirs(run_folder, exist_ok=True)
     print(f"📁 Saving to: {run_folder}/")
     
@@ -977,8 +1106,59 @@ def main():
     # Show all plots
     plt.show()
     
-    return nn, history
+    return nn, history, test_accuracy
+
+
+def compare_models():
+    """Run both categorical and ordinal models and compare results."""
+    print("\n" + "=" * 80)
+    print("COMPARISON: Categorical (Softmax) vs Ordinal Regression")
+    print("=" * 80)
+    
+    # Run categorical model
+    print("\n" + "=" * 80)
+    print("RUNNING CATEGORICAL MODEL...")
+    print("=" * 80)
+    plt.close('all')
+    nn_cat, history_cat, acc_cat = main(use_ordinal=False)
+    
+    # Run ordinal model
+    print("\n" + "=" * 80)
+    print("RUNNING ORDINAL MODEL...")
+    print("=" * 80)
+    plt.close('all')
+    nn_ord, history_ord, acc_ord = main(use_ordinal=True)
+    
+    # Summary
+    print("\n" + "=" * 80)
+    print("FINAL COMPARISON")
+    print("=" * 80)
+    print(f"\n{'Model':<25} {'Test Accuracy':<15}")
+    print("-" * 40)
+    print(f"{'Categorical (Softmax)':<25} {acc_cat:.4f} ({acc_cat*100:.2f}%)")
+    print(f"{'Ordinal Regression':<25} {acc_ord:.4f} ({acc_ord*100:.2f}%)")
+    print("-" * 40)
+    
+    improvement = (acc_ord - acc_cat) * 100
+    if improvement > 0:
+        print(f"\n✅ Ordinal regression improves accuracy by {improvement:.2f} percentage points!")
+    elif improvement < 0:
+        print(f"\n⚠️  Categorical model performs better by {-improvement:.2f} percentage points")
+    else:
+        print(f"\n📊 Both models perform equally")
+    
+    return (nn_cat, acc_cat), (nn_ord, acc_ord)
 
 
 if __name__ == "__main__":
-    nn, losses = main()
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == '--compare':
+        # Compare both models
+        compare_models()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--ordinal':
+        # Run only ordinal model
+        nn, history, acc = main(use_ordinal=True)
+    else:
+        # Default: run categorical model
+        nn, history, acc = main(use_ordinal=False)
